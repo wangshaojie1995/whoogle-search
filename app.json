@@ -15,6 +15,11 @@
   ],
   "stack": "container",
   "env": {
+    "WHOOGLE_URL_PREFIX": {
+      "description": "The URL prefix to use for the whoogle instance (i.e. \"/whoogle\")",
+      "value": "",
+      "required": false
+    },
     "WHOOGLE_USER": {
       "description": "The username for basic auth. WHOOGLE_PASS must also be set if used. Leave empty to disable.",
       "value": "",
@@ -47,31 +52,61 @@
     },
     "WHOOGLE_ALT_TW": {
       "description": "The site to use as a replacement for twitter.com when site alternatives are enabled in the config.",
-      "value": "nitter.net",
+      "value": "farside.link/nitter",
       "required": false
     },
     "WHOOGLE_ALT_YT": {
       "description": "The site to use as a replacement for youtube.com when site alternatives are enabled in the config.",
-      "value": "invidious.snopyta.org",
-      "required": false
-    },
-    "WHOOGLE_ALT_IG": {
-      "description": "The site to use as a replacement for instagram.com when site alternatives are enabled in the config.",
-      "value": "bibliogram.art/u",
+      "value": "farside.link/invidious",
       "required": false
     },
     "WHOOGLE_ALT_RD": {
       "description": "The site to use as a replacement for reddit.com when site alternatives are enabled in the config.",
-      "value": "libredd.it",
+      "value": "farside.link/libreddit",
+      "required": false
+    },
+    "WHOOGLE_ALT_MD": {
+      "description": "The site to use as a replacement for medium.com when site alternatives are enabled in the config.",
+      "value": "farside.link/scribe",
       "required": false
     },
     "WHOOGLE_ALT_TL": {
       "description": "The Google Translate alternative to use for all searches following the 'translate ___' structure.",
-      "value": "lingva.ml",
+      "value": "farside.link/lingva",
       "required": false
+    },
+    "WHOOGLE_ALT_IMG": {
+      "description": "The site to use as a replacement for imgur.com when site alternatives are enabled in the config.",
+      "value": "farside.link/rimgo",
+      "required": false
+    },
+    "WHOOGLE_ALT_WIKI": {
+      "description": "The site to use as a replacement for wikipedia.com when site alternatives are enabled in the config.",
+      "value": "farside.link/wikiless",
+      "required": false
+    },
+    "WHOOGLE_ALT_IMDB": {
+      "description": "The site to use as a replacement for imdb.com when site alternatives are enabled in the config.",
+      "value": "farside.link/libremdb",
+      "required": false
+    },
+    "WHOOGLE_ALT_QUORA": {
+      "description": "The site to use as a replacement for quora.com when site alternatives are enabled in the config.",
+      "value": "farside.link/quetre",
+      "required": false
+    },
+    "WHOOGLE_MINIMAL": {
+        "description": "Remove everything except basic result cards from all search queries (set to 1 or leave blank)",
+        "value": "",
+        "required": false
     },
     "WHOOGLE_CONFIG_COUNTRY": {
         "description": "[CONFIG] The country to use for restricting search results (use values from https://raw.githubusercontent.com/benbusby/whoogle-search/develop/app/static/settings/countries.json)",
+        "value": "",
+        "required": false
+    },
+    "WHOOGLE_CONFIG_TIME_PERIOD" : {
+        "description": "[CONFIG] The time period to use for restricting search results",
         "value": "",
         "required": false
     },
@@ -137,7 +172,17 @@
     },
     "WHOOGLE_CONFIG_STYLE": {
         "description": "[CONFIG] Custom CSS styling (paste in CSS or leave blank)",
+        "value": ":root { /* LIGHT THEME COLORS */ --whoogle-background: #d8dee9; --whoogle-accent: #2e3440; --whoogle-text: #3B4252; --whoogle-contrast-text: #eceff4; --whoogle-secondary-text: #70757a; --whoogle-result-bg: #fff; --whoogle-result-title: #4c566a; --whoogle-result-url: #81a1c1; --whoogle-result-visited: #a3be8c; /* DARK THEME COLORS */ --whoogle-dark-background: #222; --whoogle-dark-accent: #685e79; --whoogle-dark-text: #fff; --whoogle-dark-contrast-text: #000; --whoogle-dark-secondary-text: #bbb; --whoogle-dark-result-bg: #000; --whoogle-dark-result-title: #1967d2; --whoogle-dark-result-url: #4b11a8; --whoogle-dark-result-visited: #bbbbff; }",
+        "required": false
+    },
+    "WHOOGLE_CONFIG_PREFERENCES_ENCRYPTED": {
+        "description": "[CONFIG] Encrypt preferences token, requires WHOOGLE_CONFIG_PREFERENCES_KEY to be set",
         "value": "",
+        "required": false
+    },
+    "WHOOGLE_CONFIG_PREFERENCES_KEY": {
+        "description": "[CONFIG] Key to encrypt preferences",
+        "value": "NEEDS_TO_BE_MODIFIED",
         "required": false
     }
   }

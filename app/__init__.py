@@ -1,30 +1,45 @@
 from app.filter import clean_query
 from app.request import send_tor_signal
-from app.utils.session import generate_user_key
-from app.utils.bangs import gen_bangs_json
-from app.utils.misc import gen_file_hash
+from app.utils.session import generate_key
+from app.utils.bangs import gen_bangs_json, load_all_bangs
+from app.utils.misc import gen_file_hash, read_config_bool
+from base64 import b64encode
+from bs4 import MarkupResemblesLocatorWarning
+from datetime import datetime, timedelta
+from dotenv import load_dotenv
 from flask import Flask
-from flask_session import Session
 import json
 import logging.config
 import os
 from stem import Signal
-from dotenv import load_dotenv
+import threading
+import warnings
+
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+from app.utils.misc import read_config_bool
+from app.version import __version__
 
 app = Flask(__name__, static_folder=os.path.dirname(
     os.path.abspath(__file__)) + '/static')
 
-# Load .env file if enabled
-if os.getenv("WHOOGLE_DOTENV", ''):
-    dotenv_path = '../whoogle.env'
-    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             dotenv_path))
+app.wsgi_app = ProxyFix(app.wsgi_app)
 
-app.default_key = generate_user_key()
-app.no_cookie_ips = []
-app.config['SECRET_KEY'] = os.urandom(32)
-app.config['SESSION_TYPE'] = 'filesystem'
-app.config['VERSION_NUMBER'] = '0.5.4'
+dot_env_path = (
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+    '../whoogle.env'))
+
+# Load .env file if enabled
+if os.path.exists(dot_env_path):
+    load_dotenv(dot_env_path)
+
+app.enc_key = generate_key()
+
+if read_config_bool('HTTPS_ONLY'):
+    app.config['SESSION_COOKIE_NAME'] = '__Secure-session'
+    app.config['SESSION_COOKIE_SECURE'] = True
+
+app.config['VERSION_NUMBER'] = __version__
 app.config['APP_ROOT'] = os.getenv(
     'APP_ROOT',
     os.path.dirname(os.path.abspath(__file__)))
@@ -38,21 +53,31 @@ app.config['LANGUAGES'] = json.load(open(
     os.path.join(app.config['STATIC_FOLDER'], 'settings/languages.json'),
     encoding='utf-8'))
 app.config['COUNTRIES'] = json.load(open(
-    os.path.join(app.config['STATIC_FOLDER'], 'settings/countries.json')))
+    os.path.join(app.config['STATIC_FOLDER'], 'settings/countries.json'),
+    encoding='utf-8'))
+app.config['TIME_PERIODS'] = json.load(open(
+    os.path.join(app.config['STATIC_FOLDER'], 'settings/time_periods.json'),
+    encoding='utf-8'))
 app.config['TRANSLATIONS'] = json.load(open(
-    os.path.join(app.config['STATIC_FOLDER'], 'settings/translations.json')))
+    os.path.join(app.config['STATIC_FOLDER'], 'settings/translations.json'),
+    encoding='utf-8'))
 app.config['THEMES'] = json.load(open(
-    os.path.join(app.config['STATIC_FOLDER'], 'settings/themes.json')))
+    os.path.join(app.config['STATIC_FOLDER'], 'settings/themes.json'),
+    encoding='utf-8'))
+app.config['HEADER_TABS'] = json.load(open(
+    os.path.join(app.config['STATIC_FOLDER'], 'settings/header_tabs.json'),
+    encoding='utf-8'))
 app.config['CONFIG_PATH'] = os.getenv(
     'CONFIG_VOLUME',
     os.path.join(app.config['STATIC_FOLDER'], 'config'))
 app.config['DEFAULT_CONFIG'] = os.path.join(
     app.config['CONFIG_PATH'],
     'config.json')
-app.config['CONFIG_DISABLE'] = os.getenv('WHOOGLE_CONFIG_DISABLE', '')
+app.config['CONFIG_DISABLE'] = read_config_bool('WHOOGLE_CONFIG_DISABLE')
 app.config['SESSION_FILE_DIR'] = os.path.join(
     app.config['CONFIG_PATH'],
     'session')
+app.config['MAX_SESSION_SIZE'] = 4000  # Sessions won't exceed 4KB
 app.config['BANG_PATH'] = os.getenv(
     'CONFIG_VOLUME',
     os.path.join(app.config['STATIC_FOLDER'], 'bangs'))
@@ -60,10 +85,49 @@ app.config['BANG_FILE'] = os.path.join(
     app.config['BANG_PATH'],
     'bangs.json')
 
+# Ensure all necessary directories exist
+if not os.path.exists(app.config['CONFIG_PATH']):
+    os.makedirs(app.config['CONFIG_PATH'])
+
+if not os.path.exists(app.config['SESSION_FILE_DIR']):
+    os.makedirs(app.config['SESSION_FILE_DIR'])
+
+if not os.path.exists(app.config['BANG_PATH']):
+    os.makedirs(app.config['BANG_PATH'])
+
+if not os.path.exists(app.config['BUILD_FOLDER']):
+    os.makedirs(app.config['BUILD_FOLDER'])
+
+# Session values
+app_key_path = os.path.join(app.config['CONFIG_PATH'], 'whoogle.key')
+if os.path.exists(app_key_path):
+    try:
+        app.config['SECRET_KEY'] = open(app_key_path, 'r').read()
+    except PermissionError:
+        app.config['SECRET_KEY'] = str(b64encode(os.urandom(32)))
+else:
+    app.config['SECRET_KEY'] = str(b64encode(os.urandom(32)))
+    with open(app_key_path, 'w') as key_file:
+        key_file.write(app.config['SECRET_KEY'])
+        key_file.close()
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=365)
+
+# NOTE: SESSION_COOKIE_SAMESITE must be set to 'lax' to allow the user's
+# previous session to persist when accessing the instance from an external
+# link. Setting this value to 'strict' causes Whoogle to revalidate a new
+# session, and fail, resulting in cookies being disabled.
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+
+# Config fields that are used to check for updates
+app.config['RELEASES_URL'] = 'https://github.com/' \
+                             'benbusby/whoogle-search/releases'
+app.config['LAST_UPDATE_CHECK'] = datetime.now() - timedelta(hours=24)
+app.config['HAS_UPDATE'] = ''
+
 # The alternative to Google Translate is treated a bit differently than other
 # social media site alternatives, in that it is used for any translation
 # related searches.
-translate_url = os.getenv('WHOOGLE_ALT_TL', 'https://lingva.ml')
+translate_url = os.getenv('WHOOGLE_ALT_TL', 'https://farside.link/lingva')
 if not translate_url.startswith('http'):
     translate_url = 'https://' + translate_url
 app.config['TRANSLATE_URL'] = translate_url
@@ -77,22 +141,17 @@ app.config['CSP'] = 'default-src \'none\';' \
                     'media-src \'self\';' \
                     'connect-src \'self\';'
 
-if not os.path.exists(app.config['CONFIG_PATH']):
-    os.makedirs(app.config['CONFIG_PATH'])
-
-if not os.path.exists(app.config['SESSION_FILE_DIR']):
-    os.makedirs(app.config['SESSION_FILE_DIR'])
-
-# Generate DDG bang filter, and create path if it doesn't exist yet
-if not os.path.exists(app.config['BANG_PATH']):
-    os.makedirs(app.config['BANG_PATH'])
+# Generate DDG bang filter
+generating_bangs = False
 if not os.path.exists(app.config['BANG_FILE']):
-    gen_bangs_json(app.config['BANG_FILE'])
+    generating_bangs = True
+    json.dump({}, open(app.config['BANG_FILE'], 'w'))
+    bangs_thread = threading.Thread(
+        target=gen_bangs_json,
+        args=(app.config['BANG_FILE'],))
+    bangs_thread.start()
 
 # Build new mapping of static files for cache busting
-if not os.path.exists(app.config['BUILD_FOLDER']):
-    os.makedirs(app.config['BUILD_FOLDER'])
-
 cache_busting_dirs = ['css', 'js']
 for cb_dir in cache_busting_dirs:
     full_cb_dir = os.path.join(app.config['STATIC_FOLDER'], cb_dir)
@@ -119,12 +178,18 @@ app.jinja_env.globals.update(clean_query=clean_query)
 app.jinja_env.globals.update(
     cb_url=lambda f: app.config['CACHE_BUSTING_MAP'][f])
 
-Session(app)
-
 # Attempt to acquire tor identity, to determine if Tor config is available
 send_tor_signal(Signal.HEARTBEAT)
 
+# Suppress spurious warnings from BeautifulSoup
+warnings.simplefilter('ignore', MarkupResemblesLocatorWarning)
+
 from app import routes  # noqa
+
+# The gen_bangs_json function takes care of loading bangs, so skip it here if
+# it's already being loaded
+if not generating_bangs:
+    load_all_bangs(app.config['BANG_FILE'])
 
 # Disable logging from imported modules
 logging.config.dictConfig({

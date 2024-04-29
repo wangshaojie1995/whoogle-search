@@ -1,10 +1,10 @@
 from cryptography.fernet import Fernet
 from flask import current_app as app
 
-REQUIRED_SESSION_VALUES = ['uuid', 'config', 'key']
+REQUIRED_SESSION_VALUES = ['uuid', 'config', 'key', 'auth']
 
 
-def generate_user_key(cookies_disabled=False) -> bytes:
+def generate_key() -> bytes:
     """Generates a key for encrypting searches and element URLs
 
     Args:
@@ -16,9 +16,6 @@ def generate_user_key(cookies_disabled=False) -> bytes:
         str: A unique Fernet key
 
     """
-    if cookies_disabled:
-        return app.default_key
-
     # Generate/regenerate unique key per user
     return Fernet.generate_key()
 

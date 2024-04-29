@@ -1,12 +1,13 @@
 import os
+import re
 from typing import Any
-
+from app.filter import Filter
+from app.request import gen_query
+from app.utils.misc import get_proxy_host_url
+from app.utils.results import get_first_link
 from bs4 import BeautifulSoup as bsoup
 from cryptography.fernet import Fernet, InvalidToken
 from flask import g
-
-from app.filter import Filter, get_first_link
-from app.request import gen_query
 
 TOR_BANNER = '<hr><h1 style="text-align: center">You are using Tor</h1><hr>'
 CAPTCHA = 'div class="g-recaptcha"'
@@ -52,16 +53,18 @@ class Search:
     Attributes:
         request: the incoming flask request
         config: the current user config settings
-        session: the flask user session
+        session_key: the flask user fernet key
     """
-    def __init__(self, request, config, session, cookies_disabled=False):
+    def __init__(self, request, config, session_key, cookies_disabled=False):
         method = request.method
+        self.request = request
         self.request_params = request.args if method == 'GET' else request.form
         self.user_agent = request.headers.get('User-Agent')
         self.feeling_lucky = False
         self.config = config
-        self.session = session
+        self.session_key = session_key
         self.query = ''
+        self.widget = ''
         self.cookies_disabled = cookies_disabled
         self.search_type = self.request_params.get(
             'tbm') if 'tbm' in self.request_params else ''
@@ -95,13 +98,26 @@ class Search:
         else:
             # Attempt to decrypt if this is an internal link
             try:
-                q = Fernet(self.session['key']).decrypt(q.encode()).decode()
+                q = Fernet(self.session_key).decrypt(q.encode()).decode()
             except InvalidToken:
                 pass
 
-        # Strip leading '! ' for "feeling lucky" queries
-        self.feeling_lucky = q.startswith('! ')
-        self.query = q[2:] if self.feeling_lucky else q
+        # Strip '!' for "feeling lucky" queries
+        if match := re.search("(^|\s)!($|\s)", q):
+            self.feeling_lucky = True
+            start, end = match.span()
+            self.query = " ".join([seg for seg in [q[:start], q[end:]] if seg])
+        else:
+            self.feeling_lucky = False
+            self.query = q
+
+        # Check for possible widgets
+        self.widget = "ip" if re.search("([^a-z0-9]|^)my *[^a-z0-9] *(ip|internet protocol)" +
+                        "($|( *[^a-z0-9] *(((addres|address|adres|" +
+                        "adress)|a)? *$)))", self.query.lower()) else self.widget
+        self.widget = 'calculator' if re.search(
+                r"\bcalculator\b|\bcalc\b|\bcalclator\b|\bmath\b",
+                self.query.lower()) else self.widget
         return self.query
 
     def generate_response(self) -> str:
@@ -113,14 +129,21 @@ class Search:
 
         """
         mobile = 'Android' in self.user_agent or 'iPhone' in self.user_agent
+        # reconstruct url if X-Forwarded-Host header present
+        root_url = get_proxy_host_url(
+            self.request,
+            self.request.url_root,
+            root=True)
 
-        content_filter = Filter(self.session['key'],
+        content_filter = Filter(self.session_key,
+                                root_url=root_url,
                                 mobile=mobile,
-                                config=self.config)
+                                config=self.config,
+                                query=self.query)
         full_query = gen_query(self.query,
                                self.request_params,
-                               self.config,
-                               content_filter.near)
+                               self.config)
+        self.full_query = full_query
 
         # force mobile search when view image is true and
         # the request is not already made by a mobile
@@ -129,35 +152,40 @@ class Search:
                       and not g.user_request.mobile)
 
         get_body = g.user_request.send(query=full_query,
-                                       force_mobile=view_image)
+                                       force_mobile=view_image,
+                                       user_agent=self.user_agent)
 
         # Produce cleanable html soup from response
-        html_soup = bsoup(content_filter.reskin(get_body.text), 'html.parser')
+        get_body_safed = get_body.text.replace("&lt;","andlt;").replace("&gt;","andgt;")
+        html_soup = bsoup(get_body_safed, 'html.parser')
 
         # Replace current soup if view_image is active
         if view_image:
             html_soup = content_filter.view_image(html_soup)
 
         # Indicate whether or not a Tor connection is active
-        tor_banner = bsoup('', 'html.parser')
         if g.user_request.tor_valid:
-            tor_banner = bsoup(TOR_BANNER, 'html.parser')
-        html_soup.insert(0, tor_banner)
+            html_soup.insert(0, bsoup(TOR_BANNER, 'html.parser'))
 
+        formatted_results = content_filter.clean(html_soup)
         if self.feeling_lucky:
-            return get_first_link(html_soup)
-        else:
-            formatted_results = content_filter.clean(html_soup)
+            if lucky_link := get_first_link(formatted_results):
+                return lucky_link
 
-            # Append user config to all search links, if available
-            param_str = ''.join('&{}={}'.format(k, v)
-                                for k, v in
-                                self.request_params.to_dict(flat=True).items()
-                                if self.config.is_safe_key(k))
-            for link in formatted_results.find_all('a', href=True):
-                if 'search?' not in link['href'] or link['href'].index(
-                        'search?') > 1:
-                    continue
-                link['href'] += param_str
+            # Fall through to regular search if unable to find link
+            self.feeling_lucky = False
 
-            return str(formatted_results)
+        # Append user config to all search links, if available
+        param_str = ''.join('&{}={}'.format(k, v)
+                            for k, v in
+                            self.request_params.to_dict(flat=True).items()
+                            if self.config.is_safe_key(k))
+        for link in formatted_results.find_all('a', href=True):
+            link['rel'] = "nofollow noopener noreferrer"
+            if 'search?' not in link['href'] or link['href'].index(
+                    'search?') > 1:
+                continue
+            link['href'] += param_str
+
+        return str(formatted_results)
+
